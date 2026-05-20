@@ -8,7 +8,7 @@ A fully functional IRC server written in C++98, built from scratch as part of th
 
 ## What it is
 
-`ft_IRC` implements the server side of the IRC protocol (Internet Relay Chat). Real IRC clients like `irssi`, `WeeChat`, or `netcat` can connect to it and interact through standard IRC commands. The server handles multiple simultaneous connections using a single `poll()` event loop — no forking, no threads.
+`ft_IRC` implements the server side of the IRC protocol (Internet Relay Chat). Real IRC clients like `irssi`, `WeeChat`, or `netcat` can connect to it and interact through standard IRC commands. The server handles multiple simultaneous connections using a single `poll()` event loop without the implementation of forking or threads.
 
 Built by [Miguel Andrade](https://github.com/miguandr) and [Daniela Torretta](https://github.com/dtorretta).
 
@@ -117,18 +117,28 @@ Multiple modes can be combined in a single command: `MODE #general +itk secretpa
 
 ## Architecture
 
-```
-main.cpp
-└── Server (sources/core/Server.cpp)
-    ├── init()          — creates and binds the listening socket
-    ├── execute()       — main poll() event loop
-    ├── NewClient()     — accepts incoming connections
-    ├── NewData()       — reads and buffers incoming data per client
-    └── parser()        — routes commands to handlers via function pointer maps
+The server uses a single-threaded, poll-based event loop. All client sockets are monitored simultaneously — the server blocks on `poll()` and reacts only when a socket has activity.
 
+- **Server** (`sources/core/Server.cpp`) — owns the main loop, accepts new connections, and routes incoming commands via two dispatch maps: one for registration commands, one for channel commands.
+- **Client** (`sources/core/Client.cpp`) — represents a connected user. Tracks authentication state across three flags (`_passRegistered`, `_logedIn`, `_isQuitting`), stores the incoming data buffer, nickname, username, and pending channel invitations.
+- **Channel** (`sources/core/Channel.cpp`) — represents a chat room. Maintains separate vectors for regular members and operators, active mode flags, topic, password, and user limit. Exposes four `broadcast_message` overloads to send to all members or all except a given fd.
+- **Utils** (`sources/utils/utils.cpp`) — signal handling, `_sendResponse`, buffer parsing, and cleanup logic for clients, channels, and file descriptors.
+- **Messages** (`includes/utils/messages.hpp`) — all IRC numeric reply codes and response macros, defined against RFC 1459.
+
+### Command pipeline
+
+1. Raw data arrives on a client socket
+2. Appended to the client's per-connection buffer
+3. Complete messages (ending in `\r\n`) are extracted and split into tokens
+4. Each command is normalized to uppercase and dispatched through the appropriate map to its handler
+
+### File layout
+
+```
 sources/core/
-├── Client.cpp  — per-connection state (fd, nick, username, buffer, auth flags)
-└── Channel.cpp — channel state (members, admins, modes, topic, password)
+├── Server.cpp  — main loop: init(), execute(), NewClient(), NewData(), parser()
+├── Client.cpp  — per-connection state
+└── Channel.cpp — channel state, member management, broadcast
 
 sources/registration/
 ├── PassCommand.cpp  — PASS
@@ -145,19 +155,9 @@ sources/commands/
 ├── ModeCommand.cpp     — MODE
 └── QuitCommand.cpp     — QUIT
 
-sources/utils/utils.cpp — signal handler, send/response helpers, socket cleanup
-
-includes/utils/messages.hpp — all IRC response and error macros (RFC numeric codes)
+sources/utils/utils.cpp         — signal handler, response helpers, socket cleanup
+includes/utils/messages.hpp     — IRC numeric codes and response macros
 ```
-
-### How the poll loop works
-
-The server uses a single `poll()` call to monitor all file descriptors — both the listening socket and all connected client sockets. No threads, no blocking calls.
-
-1. A new connection arrives on the listening socket → `NewClient()` accepts it, creates a `Client` object, and adds the fd to the poll list.
-2. Data arrives on a client socket → `NewData()` reads into a per-client buffer. Because TCP is a stream protocol, messages can arrive in fragments. The buffer accumulates data until a `\r\n` delimiter is found.
-3. Complete commands are split and passed one by one to `parser()`, which normalizes the command name to uppercase, then dispatches it through one of two `std::map<string, CommandHandler>` function pointer maps — one for registration commands, one for channel commands.
-4. Channel commands require full registration (`PASS` + `NICK` + `USER`) before they're accessible.
 
 ### Client authentication states
 
@@ -179,31 +179,11 @@ Each `Channel` holds two separate vectors: `_clients` (regular members) and `_ad
 
 ---
 
-## Files that should not be in this repo
+## Skills demonstrated
 
-Before making this public, run:
-
-```bash
-# Remove tracked files that shouldn't be here
-git rm --cached .DS_Store
-git rm --cached .vscode/settings.json
-git rm --cached bircd.tar.gz
-git rm --cached read.txt
-git rm --cached IRC_architecture.txt
-git commit -m "chore: remove system and dev files from tracking"
-```
-
-Then add a `.gitignore`:
-
-```
-.DS_Store
-.vscode/
-*.tar.gz
-*.tar
-*.zip
-obj/
-ircserv
-read.txt
-IRC_architecture.txt
-```
-
+- **Socket programming** — TCP server from scratch: `socket()`, `bind()`, `listen()`, `accept()`, non-blocking I/O with `fcntl()`, `SO_REUSEADDR`
+- **Event-driven I/O** — single-threaded `poll()` loop managing N simultaneous connections without threads or forking
+- **Protocol implementation** — IRC protocol parsing (fragmented TCP streams, `\r\n` framing, prefix/command/params format), RFC 1459 numeric reply codes
+- **C++98** — function pointer maps (`std::map<string, void(Server::*)(string, int)>`), orthodox canonical form.
+- **State machine design** — three-stage auth flow (`passRegistered` → `logedIn`), dual-vector channel membership model (clients vs operators)
+- **Systems programming** — signal handling (`SIGINT`/`SIGTERM`), fd lifecycle management, graceful client disconnection and resource cleanup
