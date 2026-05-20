@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+
+# Build artifacts
+obj/
+ircserv
+
+# Archives
+*.tar.gz
+*.tar
+*.zip
+
+# Dev notes (not for public repo)
+read.txt
+IRC_architecture.txt
+bircd.tar.gz
